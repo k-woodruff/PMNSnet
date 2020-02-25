@@ -1,5 +1,5 @@
 # PMNSnet
-PyTorch implementation of ~SciNet~
+PyTorch implementation of <em>SciNet</em>
 https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.124.010508
 
 *To do:*
