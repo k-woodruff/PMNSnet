@@ -2,6 +2,8 @@
 PyTorch implementation of <em>SciNet</em>
 https://journals.aps.org/prl/abstract/10.1103/PhysRevLett.124.010508
 
+<em>SciNet</em> supplementary documentation https://arxiv.org/pdf/1807.10300.pdf
+
 *To do:*
 * Fix loss function
   * Currently uses mean-squared error loss
