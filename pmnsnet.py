@@ -7,6 +7,13 @@ import torch.utils.data as data
 import numpy as np
 import math
 
+def Pendulum(t, b, kappa, A0=1, m=1, delta0=0):
+    
+    omega = torch.sqrt(kappa/m)*torch.sqrt(1-b**2/(4*m*kappa))
+    Pendulum_position = A0*torch.exp(-b*t/(2*m))*torch.cos(omega*t + delta0)
+    return Pendulum_position
+
+
 class Net(nn.Module):
     def __init__(self, input_size, latent_size, encoder_num_units,
                        decoder_num_units, output_size, question_size):
@@ -53,10 +60,13 @@ class Dataset(data.Dataset):
         return self.num_samples
 
   def __getitem__(self, index):
-        # Randomly generate data for now...
-        X = torch.rand(self.input_size)*2.*3.14
-        y = torch.rand(self.output_size)*2.*3.14
+        # Randomly sample pendulum for now...
+        tvec = torch.linspace(0, 5, 50)
+        b = (1.2 - 0.4) * torch.rand(1) + 0.4
+        k = (12 - 4) * torch.rand(1) + 4
+        X = Pendulum(tvec, b, k)
         q = torch.rand(self.question_size)*10.
+        y = Pendulum(q, b, k)
 
         return X, y, q
 
@@ -101,9 +111,9 @@ def train_pmns(nepoch, batch_size=512, learning_rate=0.001,
          
             # print statistics
             running_tloss += loss.item()
-            if i % 10 == 9:    # print every 2000 mini-batches
-                print('[%d, %5d] train loss: %.3f' %
-                      (epoch + 1, i + 1, running_tloss / 100))
+            if i % 50 == 49:    # print every 2000 mini-batches
+                print('[%d, %5d] train loss: %.5f' %
+                      (epoch + 1, i + 1, running_tloss / 50))
                 running_tloss = 0.0
 
         for i, batch in enumerate(valloader):
@@ -115,13 +125,13 @@ def train_pmns(nepoch, batch_size=512, learning_rate=0.001,
 
             # forward + backward + optimize
             outputs = net(inputs, questions)
-            loss = criterion(outputs, labels.type(torch.float))
+            vloss = criterion(outputs, labels.type(torch.float))
          
             # print statistics
-            running_vloss += loss.item()
+            running_vloss += vloss.item()
             if i % 10 == 9:    # print every 2000 mini-batches
-                print('[%d, %5d] val loss: %.3f' %
-                      (epoch + 1, i + 1, running_vloss / 100))
+                print('[%d, %5d] val loss: %.5f' %
+                      (epoch + 1, i + 1, running_vloss / 10))
                 running_vloss = 0.0
 
 
