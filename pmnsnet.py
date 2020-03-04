@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data as data
 
+import Oscillations_PMNS
+
 import numpy as np
 import math
 
@@ -12,6 +14,31 @@ def Pendulum(t, b, kappa, A0=1, m=1, delta0=0):
     omega = torch.sqrt(kappa/m)*torch.sqrt(1-b**2/(4*m*kappa))
     Pendulum_position = A0*torch.exp(-b*t/(2*m))*torch.cos(omega*t + delta0)
     return Pendulum_position
+
+
+def generate_data(low_L=0, high_L=20e3, data_size=90):
+    ## making the torch data set for 0->20000 L/E
+    ## with random points
+
+    Oscillation = Oscillations_PMNS.Oscillations()
+    
+    prob_e_to_mu = []
+    prob_e_to_tau = []
+    E = 1
+    L = np.random.uniform(low=low_L, high=high_L, size=data_size)
+    L = torch.from_numpy(L)
+    
+    Oscillation.setE(E * Oscillations_PMNS.units.GeV)
+    
+    for x in range(0,len(L)):
+        Oscillation.setL(L[x] * Oscillations_PMNS.units.km)
+        prob_e_to_mu.append(Oscillation.p(Oscillations_PMNS.nu_e, Oscillations_PMNS.nu_mu))
+        prob_e_to_tau.append(Oscillation.p(Oscillations_PMNS.nu_e, Oscillations_PMNS.nu_tau))
+        
+    prob_e_to_mu   = torch.FloatTensor(prob_e_to_mu)
+    prob_e_to_tau  = torch.FloatTensor(prob_e_to_tau)
+
+    return L, prob_e_to_mu, prob_e_to_tau
 
 
 class Net(nn.Module):
@@ -52,7 +79,7 @@ class Net(nn.Module):
         x = self.decode_hidden_2(x)
         return x, sigmas, mus
 
-class Dataset(data.Dataset):
+class DatasetPendulum(data.Dataset):
   def __init__(self, num_samples, input_size, output_size, question_size, latent_size):
         self.num_samples = num_samples
         self.input_size = input_size
@@ -75,26 +102,50 @@ class Dataset(data.Dataset):
 
         return X, y, q, eps, b.item(), k.item()
 
+class DatasetPMNS(data.Dataset):
+  def __init__(self, baselines, mu_probs, tau_probs, latent_size):
+        self.baselines = baselines
+        self.mu_probs = mu_probs
+        self.tau_probs = tau_probs
+        self.latent_size = latent_size
+
+  def __len__(self):
+        return len(self.baselines)
+
+  def __getitem__(self, index):
+        L = self.baselines[index].view(1)
+        q = torch.randint(0,2,(1,))
+        if q.item() == 0:
+            P = self.mu_probs[index]
+        else:
+            P = self.tau_probs[index]
+
+        # Randomly sample pendulum for now...
+        eps = torch.randn(self.latent_size)
+
+        return L, P, q, eps
+
 
 def train_pmns(nepoch, batch_size=512, learning_rate=0.001, beta=1e-3,
-               input_size=50, latent_size=3, encoder_num_units=[500, 100],
+               input_size=1, latent_size=3, encoder_num_units=[500, 100],
                decoder_num_units=[100, 100], output_size=1, question_size=1):
 
     net = Net(input_size, latent_size, encoder_num_units, decoder_num_units, output_size, question_size)
     latent_array = []
-    b_array = []
-    k_array = []
 
     criterion = nn.MSELoss()
     optimizer = optim.Adam(net.parameters(), lr=learning_rate)
 
+    # generate PMNS data
+    L, prob_e_to_mu, prob_e_to_tau = generate_data(data_size=10)
+    L_val, prob_e_to_mu_val, prob_e_to_tau_val = generate_data(data_size=5)
     # load data
     # Parameters
     params = {'batch_size': batch_size,
               'shuffle': False,
               'num_workers': 4}
-    training_set = Dataset(95000, input_size, output_size, question_size, latent_size)
-    validation_set = Dataset(5000, input_size, output_size, question_size, latent_size)
+    training_set = DatasetPMNS(L, prob_e_to_mu, prob_e_to_tau, latent_size)
+    validation_set = DatasetPMNS(L_val, prob_e_to_mu_val, prob_e_to_tau_val, latent_size)
     trainloader = data.DataLoader(training_set, **params)
     valloader = data.DataLoader(validation_set, **params)
 
@@ -105,14 +156,14 @@ def train_pmns(nepoch, batch_size=512, learning_rate=0.001, beta=1e-3,
             net.train()
      
             # get the inputs
-            inputs, labels, questions, epsilons, b, k = batch
+            inputs, labels, questions, epsilons = batch
             labels = labels.view(-1,output_size)
 
             # zero the parameter gradients
             optimizer.zero_grad()
          
             # forward + backward + optimize
-            outputs, lat_sigs, lat_mus = net(inputs, questions, epsilons)
+            outputs, lat_sigs, lat_mus = net(inputs.float(), questions.float(), epsilons.float())
             loss = criterion(outputs, labels.type(torch.float)) \
              - beta/2.*((torch.log(lat_sigs**2) - lat_sigs**2 - lat_mus**2).sum(dim=1)-latent_size).mean()
             loss.backward()
@@ -129,11 +180,11 @@ def train_pmns(nepoch, batch_size=512, learning_rate=0.001, beta=1e-3,
             net.eval()
      
             # get the inputs
-            inputs, labels, questions, epsilons, b, k = batch
+            inputs, labels, questions, epsilons = batch
             labels = labels.view(-1,output_size)
 
             # forward + backward + optimize
-            outputs, lat_sigs, lat_mus = net(inputs, questions, epsilons)
+            outputs, lat_sigs, lat_mus = net(inputs.float(), questions.float(), epsilons.float())
             vloss = criterion(outputs, labels.type(torch.float)) \
              - beta/2.*((torch.log(lat_sigs**2) - lat_sigs**2 - lat_mus**2).sum(dim=1)-latent_size).mean()
          
@@ -146,13 +197,11 @@ def train_pmns(nepoch, batch_size=512, learning_rate=0.001, beta=1e-3,
 
             if epoch == (nepoch - 1):
                 latent_array.append(epsilons.numpy()*lat_sigs.detach().numpy()+lat_mus.detach().numpy())
-                b_array.append(b.numpy())
-                k_array.append(k.numpy())
             
 
 
     print('Finished Training')
 
-    return net, np.array(latent_array), (np.array(b_array), np.array(k_array))
+    return net, np.array(latent_array)
 
 
